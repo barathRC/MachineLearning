@@ -1,0 +1,298 @@
+
+/* Load train.csv in hdfs */
+
+Data Exploration and Transformation
+
+1. Read dataset in Spark
+//val trainDF = spark.read.format("csv").option("header", "true")
+.option("delimiter", ",").option("inferSchema", true).load("hdfs:////user/edureka_452773/bicycle/train.csv")//
+
+val trainDF = spark.read.format("csv")
+.option("header", "true").option("delimiter", ",").option("inferSchema", true).load("/user/barathrang25edu/CertificationProject/train.csv")
+
+
+2. Get summary of data and variable types
+trainDF.printSchema
+val descDF = trainDF.describe()
+
+descDF.select("summary", "season").show
+descDF.select("summary", "holiday").show
+
+descDF.select("summary", "workingday").show
+descDF.select("summary", "weather").show
+descDF.select("summary", "temp").show
+
+descDF.select("summary", "atemp").show
+descDF.select("summary", "humidity").show
+descDF.select("summary", "windspeed").show
+
+
+descDF.select("summary", "casual").show
+descDF.select("summary", "registered").show
+descDF.select("summary", "count").show
+
+3. Decide which columns should be categorical and then convert them accordingly
+
+import org.apache.spark.sql.types._
+
+val tr_trainDF = trainDF
+.withColumn("season", trainDF("season").cast(StringType))
+.withColumn("holiday", trainDF("holiday").cast(StringType))
+.withColumn("workingday", trainDF("workingday").cast(StringType))
+.withColumn("weather", trainDF("weather").cast(StringType))
+
+tr_trainDF.printSchema()
+
+
+4. Check for any missing value in dataset and treat it
+//There are no missing values
+trainDF.select(trainDF.columns.map(c => sum(col(c).isNull.cast("int")).alias(c)): _*).show
+
+
+5. Explode season column into separate columns such as season_<val> and drop season
+val season_trainDF = tr_trainDF.
+withColumn("season_1", when($"season"===1,1).otherwise(0)).
+withColumn("season_2", when($"season"===2,1).otherwise(0)).
+withColumn("season_3", when($"season"===3,1).otherwise(0)).
+withColumn("season_4", when($"season"===4,1).otherwise(0)).drop("season")
+
+season_trainDF.printSchema()
+
+
+6. Execute the same for weather as weather_<val> and drop weather
+val weather_trainDF = season_trainDF.
+withColumn("weather_1", when($"weather"===1,1).otherwise(0)).
+withColumn("weather_2", when($"weather"===2,1).otherwise(0)).
+withColumn("weather_3", when($"weather"===3,1).otherwise(0)).
+withColumn("weather_4", when($"weather"===4,1).otherwise(0)).drop("weather")
+
+weather_trainDF.printSchema()
+
+
+7. Split datetime in to meaningful columns such as hour, day, month, year, etc.
+val datetime_trainDF = weather_trainDF. withColumn("year",year(from_unixtime(unix_timestamp($"datetime", "dd-mm-yyyy hh:mm")))).
+withColumn("month",month(from_unixtime(unix_timestamp($"datetime", "dd-mm-yyyy hh:mm")))).
+withColumn("day",dayofyear(from_unixtime(unix_timestamp($"datetime", "dd-mm-yyyy hh:mm")))).
+withColumn("hour",hour(from_unixtime(unix_timestamp($"datetime", "dd-mm-yyyy hh:mm")))).
+withColumn("minute",minute(from_unixtime(unix_timestamp($"datetime", "dd-mm-yyyy hh:mm")))).drop("datetime")
+
+datetime_trainDF.printSchema()
+
+
+8. Explore how count varies with different features such as hour, month, etc
+datetime_trainDF.groupBy("year").count.show
+datetime_trainDF.groupBy("month").count.show
+
+datetime_trainDF.groupBy("day").count.show
+
+dt_trainDF.groupBy("day").count.show
+
+datetime_trainDF.groupBy("hour").count.show
+datetime_trainDF.groupBy("minute").count.show
+
+dt_trainDF.groupBy("hour").count.show
+dt_trainDF.groupBy("minute").count.show
+
+dt_trainDF.select(datetime_trainDF.columns.map(c => sum(col(c).isNull.cast("int")).alias(c)): _*).show
+
+Model Development
+1. Split the dataset into train and train_test
+
+val splitSeed = 123
+val Array(train, train_test) = dt_trainDF.randomSplit(Array(0.7, 0.3), splitSeed)
+train.take(5)
+train_test.take(5)
+
+2. Try different regression algorithms such as linear regression, random forest, etc. and note accuracy.
+
+import org.apache.spark.ml.regression.{GBTRegressionModel, GBTRegressor}
+import org.apache.spark.ml.evaluation.RegressionEvaluator
+import org.apache.spark.ml.feature.{StringIndexer, VectorAssembler}
+import org.apache.spark.ml._
+val indexer1 = { new StringIndexer()
+.setInputCol("holiday")
+.setOutputCol("holidayIndex")
+}
+
+val indexer2 = { new StringIndexer()
+.setInputCol("workingday")
+.setOutputCol("workingdayIndex")
+}
+
+val assembler = { new VectorAssembler()
+.setInputCols(Array("holidayIndex","workingdayIndex","temp","atemp","humidity","windspeed",
+"season_1","season_2","season_3","season_4",
+"weather_1","weather_2","weather_3","weather_4",
+"month","hour","minute","day","year"))
+.setOutputCol("features")
+}
+
+LinearRegression:-
+import org.apache.spark.ml.regression.LinearRegression
+
+val lr = { new LinearRegression()
+.setMaxIter(10)
+.setRegParam(0.3)
+.setElasticNetParam(0.8)
+.setLabelCol("count")
+.setFeaturesCol("features")
+}
+
+val pipeline = new Pipeline().setStages(Array(indexer1, indexer2, assembler, lr))
+
+import org.apache.spark.ml.{Pipeline, PipelineModel} 
+val linreg_mod = pipeline.fit(train) 
+
+val predictions = linreg_mod.transform(train_test)
+
+val evaluator = { new RegressionEvaluator() .setLabelCol("count") .setPredictionCol("prediction")
+.setMetricName("rmse")
+}
+val rmse = evaluator.evaluate(predictions) println("LinearRegression Root Mean Squared Error (RMSE) on test data = " + rmse)
+
+GeneralizedLinearRegression:-
+import org.apache.spark.ml.regression.GeneralizedLinearRegression
+val glr = { new GeneralizedLinearRegression()
+.setFamily("gaussian")
+.setLink("identity")
+.setMaxIter(10)
+.setRegParam(0.3)
+.setLabelCol("count")
+.setFeaturesCol("features")
+ }
+ val pipeline = new Pipeline().setStages(Array(indexer1, indexer2, assembler, glr))
+ val glr_mod = pipeline.fit(train)
+ 
+ val predictions = glr_mod.transform(train_test)
+ val evaluator = { new RegressionEvaluator()
+ .setLabelCol("count")
+ .setPredictionCol("prediction")
+ .setMetricName("rmse")
+ }
+ val rmse = evaluator.evaluate(predictions)
+ println("GeneralizedLinearRegression Root Mean Squared Error (RMSE) on test data = " + rmse)
+ 
+ 
+ DecisionTreeRegression:-
+import org.apache.spark.ml.regression.DecisionTreeRegressionModel
+import org.apache.spark.ml.regression.DecisionTreeRegressor
+
+val dt = { new DecisionTreeRegressor()
+.setLabelCol("count")
+.setFeaturesCol("features")
+}
+
+val pipeline = new Pipeline().setStages(Array(indexer1, indexer2, assembler, dt))
+val dt_model = pipeline.fit(train)
+val predictions = dt_model.transform(train_test)
+val evaluator = { new RegressionEvaluator()
+.setLabelCol("count")
+.setPredictionCol("prediction")
+.setMetricName("rmse")
+}
+
+
+val rmse = evaluator.evaluate(predictions)
+println("DecisionTreeRegressor Root Mean Squared Error (RMSE) on test data = " + rmse)
+
+
+RandomForest:-
+import org.apache.spark.ml.regression.RandomForestRegressor
+val rf = { new RandomForestRegressor()
+.setLabelCol("count")
+.setFeaturesCol("features")
+}
+
+val pipeline = new Pipeline().setStages(Array(indexer1, indexer2, assembler, rf))
+val rf_model = pipeline.fit(train)
+val predictions = rf_model.transform(train_test)
+val evaluator = { new RegressionEvaluator()
+.setLabelCol("count")
+.setPredictionCol("prediction")
+.setMetricName("rmse")
+}
+
+val rmse = evaluator.evaluate(predictions)
+println("RandomForestRegressor Root Mean Squared Error (RMSE) on test data = " + rmse)
+
+
+GBTRegressionModel:-
+
+import org.apache.spark.ml.regression.{GBTRegressionModel, GBTRegressor}
+val gbt = { new GBTRegressor()
+.setLabelCol("count")
+.setFeaturesCol("features")
+.setMaxIter(10)
+}
+
+val pipeline = new Pipeline().setStages(Array(indexer1, indexer2, assembler, gbt))
+val gbt_model = pipeline.fit(train)
+val predictions = gbt_model.transform(train_test)
+val evaluator = { new RegressionEvaluator()
+.setLabelCol("count")
+.setPredictionCol("prediction")
+.setMetricName("rmse")
+}
+
+
+GBTRegressionModel:-
+import org.apache.spark.ml.regression.{GBTRegressionModel, GBTRegressor}
+val gbt = { new GBTRegressor()
+.setLabelCol("count")
+.setFeaturesCol("features")
+.setMaxIter(10)
+}
+
+val pipeline = new Pipeline().setStages(Array(indexer1, indexer2, assembler, gbt))
+val gbt_model = pipeline.fit(train)
+val predictions = gbt_model.transform(train_test)
+val evaluator = { new RegressionEvaluator()
+.setLabelCol("count")
+.setPredictionCol("prediction")
+.setMetricName("rmse")
+}
+
+IsotonicRegression:-
+import org.apache.spark.ml.regression.IsotonicRegression
+val ir = { new IsotonicRegression()
+.setLabelCol("count")
+.setFeaturesCol("features")
+}
+val pipeline = new Pipeline().setStages(Array(indexer1, indexer2, assembler, ir))
+val ir_model = pipeline.fit(train)
+val predictions = ir_model.transform(train_test)
+val evaluator = { new RegressionEvaluator()
+.setLabelCol("count")
+.setPredictionCol("prediction")
+.setMetricName("rmse")
+}
+
+
+val rmse = evaluator.evaluate(predictions) println("IsotonicRegression Root Mean Squared Error (RMSE) on test data = " + rmse)
+
+3. Select the best model and persist it
+
+Best model: GBT Regressor
+GBTRegressor Root Mean Squared Error (RMSE) on test data = 113.5289309054203
+
+gbt_model.write.overwrite().save("/user/barathrang25edu/CertificationProject/train.csvbicycle-model")
+
+
+
+
+
+
+ 
+
+
+
+
+
+
+
+
+
+
+
+
+
