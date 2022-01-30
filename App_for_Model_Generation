@@ -1,0 +1,155 @@
+
+Model Implementation and Prediction
+
+Application Development for Model Generation
+
+For the above steps write an application to:
+
+import org.apache.spark.{SparkConf, SparkContext}
+import org.apache.spark.SparkContext._
+import org.apache.spark.sql._
+import org.apache.spark.sql.types._
+import org.apache.spark.sql.functions._
+import org.apache.spark.ml.{Pipeline, PipelineModel} 
+import org.apache.spark.ml.regression.LinearRegression
+import org.apache.spark.ml.regression.GeneralizedLinearRegression
+import org.apache.spark.ml.regression.DecisionTreeRegressionModel
+import org.apache.spark.ml.regression.DecisionTreeRegressor
+import org.apache.spark.ml.regression.RandomForestRegressor
+import org.apache.spark.ml.regression.IsotonicRegression
+import org.apache.spark.ml.regression.{GBTRegressionModel, GBTRegressor}
+import org.apache.spark.ml.evaluation.RegressionEvaluator
+import org.apache.spark.ml.feature.{StringIndexer, VectorAssembler}
+import org.apache.spark.ml._
+
+object BicyclePredict {
+
+def main(args: Array[String]) {
+
+val sparkConf = new SparkConf().setAppName("Telecom") val sc = new SparkContext(sparkConf)
+sc.setLogLevel("ERROR")
+
+val spark = new org.apache.spark.sql.SQLContext(sc) import spark.implicits._
+
+println("Reading training data…")
+
+val trainDF = spark.read.format("csv").
+option("header", "true").
+option("delimiter", ",").
+option("inferSchema", true).
+load("/user/barathrang25edu/CertificationProject/train.csv")
+
+Clean and Transform the data
+
+println("Cleaning data...")
+val tr_trainDF = trainDF.
+withColumn("season", trainDF("season").cast(StringType)).
+withColumn("holiday", trainDF("holiday").cast(StringType)).
+withColumn("workingday", trainDF("workingday").cast(StringType)).
+withColumn("weather", trainDF("weather").cast(StringType))
+
+val season_trainDF = tr_trainDF.
+withColumn("season_1", when($"season"===1,1).otherwise(0)).
+withColumn("season_2", when($"season"===2,1).otherwise(0)).
+withColumn("season_3", when($"season"===3,1).otherwise(0)).
+withColumn("season_4", when($"season"===4,1).otherwise(0)).drop("season")
+
+val weather_trainDF = season_trainDF.
+withColumn("weather_1", when($"weather"===1,1).otherwise(0)).
+withColumn("weather_2", when($"weather"===2,1).otherwise(0)).
+withColumn("weather_3", when($"weather"===3,1).otherwise(0)).
+withColumn("weather_4", when($"weather"===4,1).otherwise(0)).drop("weather")
+
+val datetime_trainDF = weather_trainDF.
+withColumn("year",year(from_unixtime(unix_timestamp($"datetime", "dd-mm-yyyy hh:mm")))).
+withColumn("month",month(from_unixtime(unix_timestamp($"datetime", "dd-mm-yyyy hh:mm")))).
+withColumn("day",dayofyear(from_unixtime(unix_timestamp($"datetime", "dd-mm-yyyy hh:mm")))).
+withColumn("hour",hour(from_unixtime(unix_timestamp($"datetime", "dd-mm-yyyy hh:mm")))).
+withColumn("minute",minute(from_unixtime(unix_timestamp($"datetime", "dd-mm-yyyy hh:mm")))).drop("datetime")
+
+datetime_trainDF.select(datetime_trainDF.columns.map(c => sum(col(c).isNull.cast("int")).alias(c)): _*).show
+
+val dt_trainDF = datetime_trainDF.na.fill(0)
+
+dt_trainDF.groupBy(“year").count.show
+dt_trainDF.groupBy(“month").count.show
+dt_trainDF.groupBy(“day").count.show
+dt_trainDF.groupBy(“hour").count.show
+dt_trainDF.groupBy(“minute").count.show
+
+  
+2. Develop the model and persist it.
+
+val splitSeed = 123
+
+val Array(train, train_test) = dt_trainDF.randomSplit(Array(0.7, 0.3), splitSeed)
+
+val indexer1 = { new StringIndexer()
+.setInputCol("holiday")
+.setOutputCol("holidayIndex")
+}
+
+val indexer2 = { new StringIndexer()
+.setInputCol("workingday")
+.setOutputCol("workingdayIndex")
+}
+
+val assembler = { new VectorAssembler()
+.setInputCols(Array("holidayIndex","workingdayIndex","temp","atemp","humidity","windspeed",
+"season_1","season_2","season_3","season_4","weather_1","weather_2","weather_3","weather_4",
+"month","hour","minute","day","year"))
+.setOutputCol("features")
+}
+
+val gbt = { new GBTRegressor()
+.setLabelCol("count")
+.setFeaturesCol("features")
+.setMaxIter(10)
+}
+
+val pipeline = new Pipeline().setStages(Array(indexer1, indexer2, assembler, gbt))
+
+println("Training model...")
+
+val gbt_model = pipeline.fit(train)
+
+val predictions = gbt_model.transform(train_test)
+
+val evaluator = { new RegressionEvaluator() .setLabelCol("count") .setPredictionCol("prediction")
+.setMetricName("rmse")
+}
+
+val rmse = evaluator.evaluate(predictions) println("GBTRegressor Root Mean Squared Error (RMSE) on train_test data = " + rmse)
+
+println("Persisting the model...")
+gbt_model.write.overwrite().save(“/user/barathrang25edu/CertificationProject/app-bicycle-model-gen“)
+}
+}
+
+
+Application execution:
+
+mkdir BycycleProject
+cd BycycleProject/                                                                                          
+mkdir -p src/main/scala
+vi build.sbt
+cd src/main/scala/
+vi BicycleModelGen.scala
+cd
+cd BycycleProject/
+ls
+vi build.sbt
+sbt package
+
+hdfs dfs -ls CertificationProject
+hdfs dfs -ls CertificationProject/app-bicycle-\ model-gen/stages/3_gbtr_a95fedf8cf1f/data
+
+mkdir output
+hdfs dfs -get CertificationProject/app-bicycle-\ model-gen/stages/3_gbtr_a95fedf8cf1f/data/* output
+ls output
+parquet-tools cat output/part-00000-43d2dfcc-ac3a-4289-93c6-f31fc5b944f0-c000.snappy.parquet
+
+
+
+
+// spark2-submit --class "BicycleTrain" --master yarn /mnt/home/edureka_452773/project/BicycleTrain/target/scala-2.11/bicycletrain_2.11-1.0.jar 
