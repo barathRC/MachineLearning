@@ -1,0 +1,124 @@
+
+Application Development for Demand Prediction
+
+Model Prediction Application 
+Write an application to predict the bike demand based on the input dataset from HDFS:
+1. Load the persisted model.
+2. Predict bike demand
+3. Persist the result to RDBMS
+
+Database creation:
+
+mysql -h ip-10-1-1-204.ap-south-1.compute.internal -u barathrang25edu -p
+USE barathrang25edu; 
+CREATE TABLE predictions (datetime datetime,count FLOAT);   
+
+//Application Development for Demand Prediction
+    //Model Prediction Application
+  object BicycleDemandPrediction {
+import org.apache.spark.{SparkConf, SparkContext}
+import org.apache.spark.SparkContext._
+import org.apache.spark.sql._
+import org.apache.spark.sql.types._
+import org.apache.spark.sql.functions._
+import org.apache.spark.ml.regression.{GBTRegressionModel, GBTRegressor}
+import org.apache.spark.ml.feature.{StringIndexer, VectorAssembler}
+import org.apache.spark.ml._
+    def main(args: Array[String])
+    {
+      val sparkConf = new SparkConf().setAppName("bdp")
+      val sc = new SparkContext(sparkConf)
+      sc.setLogLevel("ERROR")
+      val spark = new org.apache.spark.sql.SQLContext(sc)
+      import spark.implicits._
+      println("Reading test data...")
+      val testDF = spark.read.format("csv").
+        option("header", "true").
+        option("delimiter", ",").
+        option("inferSchema", true).
+        load("/user/barathrang25edu/CertificationProject/test.csv")
+
+      println("Cleaning data...")
+      val tr_testDF = testDF.
+        withColumn("season", testDF("season").cast(StringType)).
+        withColumn("holiday", testDF("holiday").cast(StringType)).
+        withColumn("workingday", testDF("workingday").cast(StringType)).
+        withColumn("weather", testDF("weather").cast(StringType))
+
+      val season_testDF = tr_testDF.
+        withColumn("season_1", when($"season"===1,1).otherwise(0)).
+        withColumn("season_2", when($"season"===2,1).otherwise(0)).
+        withColumn("season_3", when($"season"===3,1).otherwise(0)).
+        withColumn("season_4", when($"season"===4,1).otherwise(0)).drop("season")
+
+      val weather_testDF = season_testDF.
+        withColumn("weather_1", when($"weather"===1,1).otherwise(0)).
+        withColumn("weather_2", when($"weather"===2,1).otherwise(0)).
+        withColumn("weather_3", when($"weather"===3,1).otherwise(0)).
+        withColumn("weather_4", when($"weather"===4,1).otherwise(0)).drop("weather")
+
+      val datetime_testDF = weather_testDF.
+        withColumn("year",year(from_unixtime(unix_timestamp($"datetime", "dd-mm-yyyy hh:mm")))).
+        withColumn("month",month(from_unixtime(unix_timestamp($"datetime", "dd-mm-yyyy hh:mm")))).
+        withColumn("day",dayofyear(from_unixtime(unix_timestamp($"datetime", "dd-mm-yyyy hh:mm")))).
+        withColumn("hour",hour(from_unixtime(unix_timestamp($"datetime", "dd-mm-yyyy hh:mm")))).
+        withColumn("minute",minute(from_unixtime(unix_timestamp($"datetime", "dd-mm-yyyy hh:mm"))))
+
+      println("Loading tained model...")
+
+      val gbt_model = PipelineModel.
+        read.load("/user/barathrang25edu/CertificationProject/train.csvbicycle-model/stages/3_gbtr_c1e0de2abe39/data")
+
+      println("Making predictions...")
+      val predictions = gbt_model.transform(datetime_testDF).select($"datetime",$"prediction".as("count"))
+      println("Persisting the result to RDBMS...")
+
+      predictions.write.format("jdbc").
+        option("url", "jdbc:mysql://ip-10-1-1-204.ap-south-1.compute.internal/barathrang25edu").
+        option("driver", "com.mysql.jdbc.Driver").
+        option("dbtable", "predictions").
+        option("user", "barathrang25edu").
+        option("password", "PlumDolphin86$").
+        mode(SaveMode.Append).save
+
+
+    }
+}
+
+
+Run the application:
+mkdir bcdmprd
+cd bcdmprd/                                                                                          
+mkdir -p src/main/scala
+vi build.sbt
+name := "bicycle"                                                                                                                                                                                                                                                                             
+version := "1.0"                                                                                                                                                                                                                                                                              
+scalaVersion := "2.11.8"                                                                                                                                                                                                                                                                      
+libraryDependencies += "org.apache.spark" %% "spark-core" % "2.2.1"                                                                            
+libraryDependencies += "org.apache.spark" %% "spark-sql" % "2.2.1" % "provided"                                                                
+libraryDependencies += "org.apache.spark" %% "spark-mllib" % "2.2.1" % "provided" 
+cd src/main/scala/
+vi bcdmprd.scala
+
+
+cd
+cd bcdmprd/
+ls
+vi build.sbt
+sbt package
+
+
+
+hdfs dfs -ls CertificationProject/train.csvbicycle-model/stages/3_gbtr_c1e0de2abe39/data
+mkdir output2 
+hdfs dfs -get CertificationProject/train.csvbicycle-model/stages/3_gbtr_c1e0de2abe39/data/* output2
+ls output2
+parquet-tools cat output2/part-00000-5101cffa-52e5-4bd0-8206-ca5aadc43607-c000.snappy.parquet
+parquet-tools cat output2/part-00001-5101cffa-52e5-4bd0-8206-ca5aadc43607-c000.snappy.parquet
+
+
+bicyclepredict_2.11-1.0.jar
+
+
+
+
